@@ -1,0 +1,115 @@
+Qualitative Activity Recognition Model
+========================================================
+The human activity recognition becomes very hot topic in recent years. Most of researches focus on classifying a particular activity. Velloso, Bulling, Gellersen, Ugulino and Fuks studied another type of human activity recognition problem, that is to identify how well an activity has been performed [1]. This analysis tried to build a prediction model, that can classify some particular activity mistakes, based on their [Weight Lifting Exercises Dataset](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv). The result shows the model built via random forest algorithm has out-of-sample error rate as low as 1%.
+
+## Environment
+This analysis was carried out on `r date()`
+
+The system environment where the analysis was performed is as follows:
+
+```{r echo=FALSE}
+sessionInfo()
+```
+
+## Data Processing
+When loaded dataset into R, all the blank data were treated as NA data.
+
+The dataset contains total 160 features from four sensors (belt, arm, forearm and dumbbell) worn by 6 male participants, as stated in the [original paper](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf) [1]. The raw data include the Euler angles (roll, pitch and yaw) of each sensor, as well as the raw accelerometer, gyroscope and magnetometer readings. In additional, they also calculated 8 summary features for the Euler angles, that were mean, variance, standard deviation, max, min, amplitude, kurtosis and skewness.
+
+```{r results='hide', warning=FALSE, message=FALSE}
+library(caret)
+library(rpart)
+library(gbm)
+library(randomForest)
+
+destfile <- "pml-training.csv"
+if (!file.exists(destfile)) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile, method="curl")
+}
+pml <- read.csv(destfile, na.strings=c("", "NA"))
+
+names(pml)
+```
+
+## Features Selection
+As the summarised features are highly correlated with raw data, those features got removed from model building process, which leads to about 60 features left. Furthermore, sequence number, user name and timestamps were removed as well since they are not relevant to the classification process. Thus, a total 54 features remained in the dataset.
+
+```{r}
+pml <- pml[, colMeans(!is.na(pml)) == 1]
+pml <- pml[, -grep("(X|user_name|timestamp|window)", names(pml))]
+```
+
+However, the number of features are still too big for performing a sophisticated machine learning algorithm within a limited time. A relative simple algorithm, recursive partitioning trees, then was used to further reduce the number of features. The idea is to run this algorithm and remove those features based on their importance.
+
+Before applying the algorithm, 20% of sample dataset was reserved as testing set. The remaining 80% of sample dataset was used to train the model and perform cross validation. Only 5-fold cross validation was performed for the whole model building process due to highly time-consuming.
+
+```{r}
+set.seed(1000)
+inTrain <- createDataPartition(pml$classe, p = 0.8, list = FALSE)
+training <- pml[inTrain, ]
+testing <- pml[-inTrain, ]
+trControl <- trainControl(method = "cv", number = 5)
+```
+
+#### Recursive Partitioning Trees
+
+```{r cache=TRUE}
+set.seed(1000)
+rpartFit <- train(classe ~ ., training, method = "rpart", trControl = trControl)
+confusionMatrix(testing$classe, predict(rpartFit, testing))$overall[1]
+
+importance <- varImp(rpartFit)$importance
+features <- rownames(importance)[importance$Overall > 0]
+training <- training[, c(features, "classe")]
+```
+
+As shown, the accuracy of the resulting classification model is only nearly 50%. However, the model suggested that nearly 40 features are not significantly related to classification problem, only 15 features has more than zero importance. Therefore, only these 15 features were used in the final model building process.
+
+```{r echo=FALSE}
+featurePlot(x = training[, features], y = training[, "classe"], plot = "density", scales = list(x = list(relation = "free"), y = list(relation = "free")), adjust = 1.5, pch = "|", auto.key = list(columns = 5))
+```
+
+## Model Building
+Both boosting and random forest algorithm were used for building classification model. As shown below, comparing to boosting model, random forest model has higher accuracy but is more time-consuming.
+
+#### Generalised Boosted Model
+
+```{r cache=TRUE, message=FALSE}
+set.seed(1000)
+gbmFit <- train(classe ~ ., training, method = "gbm", trControl = trControl, verbose = FALSE)
+confusionMatrix(testing$classe, predict(gbmFit, testing))
+```
+
+#### Random Forest Model
+
+```{r cache=TRUE}
+set.seed(1000)
+rfFit <- train(classe ~., training, method = "rf", trControl = trControl)
+confusionMatrix(testing$classe, predict(rfFit, testing))
+```
+
+## Result
+As previous brief discussion, random forest models took the longest time to build. However, in return, it gives very high prediction accuracy.
+
+#### Generalised Boosted Model
+
+```{r echo=FALSE, message=FALSE}
+## Generalised Boosted Model
+sprintf("%s: %.2f", "in-sample accuracy", confusionMatrix(training$classe, predict(gbmFit, training))$overall[1])
+sprintf("%s: %.2f", "out-of-sample accuracy", confusionMatrix(testing$classe, predict(gbmFit, testing))$overall[1])
+```
+
+#### Random Forest Model
+
+```{r echo=FALSE}
+## Random Forest Model
+sprintf("%s: %.2f", "in-sample accuracy", confusionMatrix(training$classe, predict(rfFit, training))$overall[1])
+sprintf("%s: %.2f", "out-of-sample accuracy", confusionMatrix(testing$classe, predict(rfFit, testing))$overall[1])
+```
+
+```{r echo=FALSE}
+rightPrediction <- testing$classe == predict(rfFit, testing)
+qplot(seq_along(classe), classe, data = testing, colour = rightPrediction, main = "Predictions", xlab = "index") + scale_colour_discrete(name = "Right Prediction")
+```
+
+1. Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
